@@ -63,7 +63,7 @@ int main()
 		do_lpm = 1;
 
 		// Handle RF acknowledgements
-		if (rf_irq & RF24_IRQ_FLAGGED) {
+		if (rf_irq & RF24_IRQ_FLAGGED || msprf24_rx_pending()) {
 			msprf24_get_irq_reason();
 
 			// Handle TX acknowledgements
@@ -78,9 +78,9 @@ int main()
 				flush_tx();
 			}
 
-			if (rf_irq & RF24_IRQ_RX) {
+			if (rf_irq & RF24_IRQ_RX || msprf24_rx_pending()) {
 				pktlen = r_rx_peek_payload_size();
-				if (pktlen > 0 && pktlen <= 32) {
+				if (pktlen > 0 && pktlen < 33) {
 					pipeid = r_rx_payload(pktlen, (char*)rfbuf);
 					if (pipeid == 1) {
 						for (i=0; i < pktlen; i++) {

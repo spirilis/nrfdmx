@@ -11,12 +11,18 @@
 #include "misc.h"
 #include "ws2811_hs_one.h"
 
+#define NRF24_REGISTER_COUNT 0x1A
 
 const uint8_t grb_off[] = { 0x00, 0x00, 0x00 };
 const uint8_t grb_white[] = { 0xFF, 0xFF, 0xFF };
 const uint8_t grb_red[] = { 0x00, 0xFF, 0x00 };
 
 const uint8_t my_address[] = { 0xDE, 0xAD, 0xDE, 0xED, 0x01 };
+
+volatile uint16_t sleep_counter;
+
+void nrf24_dump_regs(volatile uint8_t *);
+volatile uint8_t nrf24_regs[NRF24_REGISTER_COUNT];
 
 int main()
 {
@@ -54,6 +60,11 @@ int main()
 	packet_init_tasklist();
 	dmx512_init();
 
+	sleep_counter = 10;
+	WDTCTL = WDT_ADLY_16;
+	SFRIFG1 &= ~WDTIFG;
+	SFRIE1 |= WDTIE;
+
 	while(1) {
 		do_lpm = 1;
 
@@ -68,7 +79,7 @@ int main()
 				flush_tx();
 			} /* rf_irq & RF24_IRQ_TX|RF24_IRQ_TXFAILED */
 
-			if (rf_irq & RF24_IRQ_RX) {
+			if (rf_irq & RF24_IRQ_RX || ((rf_status & 0x0E) < 0x0E)) {
 				pktlen = r_rx_peek_payload_size();
 				if (pktlen > 0 && pktlen <= 32) {
 					pipeid = r_rx_payload(pktlen, (char*)rfbuf);
@@ -99,13 +110,48 @@ int main()
 			} /* rf_irq & RF24_IRQ_RX */
 		}  /* rf_irq & RF24_IRQ_FLAGGED */
 
+		if ( !(msprf24_queue_state() & RF24_QUEUE_RXEMPTY) ) {
+			// Raise a "mock IRQ" to force us to flush the RX FIFOs.
+			rf_irq |= RF24_IRQ_FLAGGED;
+			do_lpm = 0;
+		}
+
+        if (!sleep_counter)
+            sleep_counter = 10;
+
 		if (packet_task_next() != NULL) {
 			packet_process_txqueue();
 		}
 
+        nrf24_dump_regs(nrf24_regs);
+
 		if (do_lpm)
-			LPM4;
+			LPM3;
 	} /* while(1) */
 
 	return 0;  // Should never reach here
+}
+
+void nrf24_dump_regs(volatile uint8_t *buf)
+{
+    // Dump contents of nRF24L01+ system registers
+    int i;
+
+    for (i=0; i <= 0x17; i++) {
+        buf[i] = r_reg(i);
+    }
+    buf[i] = r_reg(0x1C);
+    i++;
+    buf[i] = r_reg(0x1D);
+}
+
+// WDT overflow/timer
+#pragma vector=WDT_VECTOR
+__interrupt void WDT_ISR(void)
+{
+	SFRIFG1 &= ~WDTIFG;
+	if (sleep_counter)
+		sleep_counter--;
+	else
+		__bic_SR_register_on_exit(LPM3_bits);
 }
